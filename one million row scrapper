@@ -1,0 +1,40 @@
+# import os
+# use repartitioned
+
+class DataFrameChunkSaver:
+    def __init__(self, df, output_path, chunk_size):
+        self.df = df
+        self.output_path = output_path
+        self.chunk_size = chunk_size
+        # self.output_file_template = os.path.join(self.output_path)
+        
+        # # Ensure the directory exists
+        # os.makedirs(self.output_path, exist_ok=True)
+    
+    def count_chunks(self):
+        total_rows = self.df.count()
+        return -(-total_rows // self.chunk_size)
+
+    def repartition_df(self):
+        num_chunks = self.count_chunks()
+        return self.df.repartition(num_chunks)
+
+    def save_chunks(self):
+        try:
+            # print("Starting the saving process...")
+            repartitioned_df = self.repartition_df()
+            repartitioned_df.write.csv(chunk_file_path, header=True)
+            print("All chunks have been saved successfully.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+
+
+script = spark.sql('''select * from phbi_com.pc1pc2_order_level limit 15000000''')
+
+output_path = 'ofs://oc/phbi-ops/sg-phbi-ops-notebook/workspaces/phbi_ops/dataset/johnjayme_dataset'
+chunk_file_path = 'ofs://oc/phbi-ops/sg-phbi-ops-notebook/workspaces/phbi_ops/dataset/johnjayme_dataset/test_budget_15m'
+chunk_size = 1000000
+# sort_columns = ["grass_date"] not needed in version 1
+
+saver = DataFrameChunkSaver(script,output_path, chunk_size)
+saver.save_chunks()
