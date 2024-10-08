@@ -1,0 +1,125 @@
+# VERSION 1
+# First logic where it zips the folder (containing csv ) into a zip file
+
+import boto3
+from botocore.exceptions import NoCredentialsError, ClientError
+from io import StringIO
+import os
+import zipfile
+
+
+class S3CsvZipper:
+    def __init__(self, aws_access_key_id, aws_secret_access_key, endpoint_url, bucket_name, source_folder_path, destination_folder_path):
+        self.session = boto3.session.Session()
+        self.s3_client = self.session.client(
+            service_name='s3',
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            endpoint_url=endpoint_url,
+        )
+        self.bucket_name = bucket_name
+        self.source_folder_path = source_folder_path
+        self.destination_folder_path = destination_folder_path
+        self.temp_dir = 'temp_csvs'
+
+    def download_csvs(self):
+        os.makedirs(self.temp_dir, exist_ok=True)
+        response = self.s3_client.list_objects_v2(Bucket=self.bucket_name, Prefix=self.source_folder_path)
+        counter = 1
+
+        for obj in response.get('Contents', []):
+            if obj['Key'].endswith('.csv'):
+                print(f"Processing: {obj['Key']}")
+                csv_obj = self.s3_client.get_object(Bucket=self.bucket_name, Key=obj['Key'])
+                body = csv_obj['Body'].read().decode('utf-8')
+                local_csv_path = os.path.join(self.temp_dir, f'raw{counter}.csv')
+                with open(local_csv_path, 'w') as file:
+                    file.write(body)
+                print(f"Saved locally: {local_csv_path}")
+                counter += 1
+
+    def create_zip(self):
+        zip_file_path = 'raw_csvs.zip'
+        with zipfile.ZipFile(zip_file_path, 'w') as zipf:
+            for root, _, files in os.walk(self.temp_dir):
+                for file in files:
+                    zipf.write(os.path.join(root, file), arcname=file)
+        return zip_file_path
+
+    def upload_zip(self, zip_file_path):
+        destination_key = f"{self.destination_folder_path}raw_csvs.zip"
+
+        # Initiate multipart upload
+        multipart_upload = self.s3_client.create_multipart_upload(Bucket=self.bucket_name, Key=destination_key)
+        upload_id = multipart_upload['UploadId']
+
+        # Split the file into parts and upload each part
+        parts = []
+        part_number = 1
+        file_size = os.path.getsize(zip_file_path)
+        chunk_size = 5 * 1024 * 1024  # 5 MB
+
+        with open(zip_file_path, 'rb') as zip_file:
+            while True:
+                data = zip_file.read(chunk_size)
+                if not data:
+                    break
+
+                response = self.s3_client.upload_part(
+                    Bucket=self.bucket_name,
+                    Key=destination_key,
+                    PartNumber=part_number,
+                    UploadId=upload_id,
+                    Body=data
+                )
+                parts.append({
+                    'PartNumber': part_number,
+                    'ETag': response['ETag']
+                })
+                part_number += 1
+
+        # Complete multipart upload
+        self.s3_client.complete_multipart_upload(
+            Bucket=self.bucket_name,
+            Key=destination_key,
+            MultipartUpload={'Parts': parts},
+            UploadId=upload_id
+        )
+
+        print(f"Zip file uploaded to S3: {destination_key}")
+
+    def clean_up(self, zip_file_path):
+        for file in os.listdir(self.temp_dir):
+            os.remove(os.path.join(self.temp_dir, file))
+        os.rmdir(self.temp_dir)
+        os.remove(zip_file_path)
+        print("Clean up completed.")
+
+    def process_and_upload(self):
+        self.download_csvs()
+        zip_file_path = self.create_zip()
+        self.upload_zip(zip_file_path)
+        self.clean_up(zip_file_path)
+        print("All CSV files have been processed, zipped, and uploaded to the new folder in the S3 bucket.")
+
+  
+  aws_access_key_id = 'john.jayme'
+  aws_secret_access_key = 'xxxx'
+  endpoint_url = 'https://s3g.data-infra.shopee.io'
+  bucket_name = 'sg-phbi-ops-notebook'
+  source_folder_path = 'workspaces/phbi_ops/dataset/johnjayme_dataset/marikina_hub_df'
+  destination_folder_path = 'workspaces/phbi_ops/dataset/johnjayme_dataset/marikina_hub_df_zip/'
+  
+  zipper = S3CsvZipper(
+      aws_access_key_id, aws_secret_access_key, endpoint_url,
+      bucket_name, source_folder_path, destination_folder_path
+  )
+  zipper.process_and_upload()
+
+
+
+
+
+
+
+
